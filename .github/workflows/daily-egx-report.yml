@@ -1,0 +1,138 @@
+name: Daily EGX Intelligence Report
+
+on:
+  schedule:
+    - cron: '0 7 * * *'
+      timezone: Africa/Cairo
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 feedparser python-dateutil
+
+      - name: Get today's date
+        id: date
+        run: |
+          echo "today=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+          echo "yesterday=$(date -d yesterday +%Y-%m-%d)" >> $GITHUB_OUTPUT
+
+      - name: Load yesterday's report
+        id: previous-report
+        run: |
+          REPORT_PATH="Scheduled/${{ steps.date.outputs.yesterday }}.md"
+          if [ -f "$REPORT_PATH" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "path=$REPORT_PATH" >> $GITHUB_OUTPUT
+            echo "content<<EOF" >> $GITHUB_OUTPUT
+            cat "$REPORT_PATH" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fetch EGX data
+        id: egx-data
+        env:
+          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+        run: |
+          python scripts/fetch_egx_data.py \
+            --output temp_egx_data.json \
+            --api-key "$SERPER_API_KEY"
+
+      - name: Fetch FRA announcements
+        id: fra-data
+        run: |
+          python scripts/fetch_fra_announcements.py \
+            --output temp_fra_data.json
+
+      - name: Fetch financial news
+        id: news-data
+        run: |
+          python scripts/fetch_financial_news.py \
+            --sources mubasher,arab-finance,al-borsa,hapi \
+            --output temp_news_data.json
+
+      - name: Analyze and compare with previous report
+        id: analysis
+        run: |
+          python scripts/analyze_signals.py \
+            --egx-data temp_egx_data.json \
+            --fra-data temp_fra_data.json \
+            --news-data temp_news_data.json \
+            --previous-report "${{ steps.previous-report.outputs.path }}" \
+            --output analysis_output.json
+
+      - name: Generate report
+        id: report
+        run: |
+          python scripts/generate_report.py \
+            --analysis analysis_output.json \
+            --date "${{ steps.date.outputs.today }}" \
+            --output "Scheduled/${{ steps.date.outputs.today }}.md"
+
+      - name: Commit and push report
+        run: |
+          git config user.name "EGX Reporter Bot"
+          git config user.email "bot@egx-intelligence.local"
+          git add "Scheduled/${{ steps.date.outputs.today }}.md"
+          git commit -m "Daily EGX report: ${{ steps.date.outputs.today }}" || true
+          git push
+
+      - name: Send email notification
+        if: success() && secrets.EMAIL_ENABLED == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "EGX Daily Intelligence Report - ${{ steps.date.outputs.today }}"
+          to: ${{ secrets.EMAIL_RECIPIENT }}
+          from: ${{ secrets.EMAIL_FROM }}
+          body: |
+            Daily EGX Intelligence Report
+            Generated: ${{ steps.date.outputs.today }}
+            
+            Report: https://github.com/${{ github.repository }}/blob/main/Scheduled/${{ steps.date.outputs.today }}.md
+          attachments: Scheduled/${{ steps.date.outputs.today }}.md
+
+      - name: Send Telegram notification
+        if: success() && secrets.TELEGRAM_ENABLED == 'true'
+        run: |
+          python scripts/send_telegram.py \
+            --token "${{ secrets.TELEGRAM_BOT_TOKEN }}" \
+            --chat-id "${{ secrets.TELEGRAM_CHAT_ID }}" \
+            --report "Scheduled/${{ steps.date.outputs.today }}.md" \
+            --repo-url "https://github.com/${{ github.repository }}"
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: egx-report-${{ steps.date.outputs.today }}
+          path: Scheduled/${{ steps.date.outputs.today }}.md
+          retention-days: 30
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f temp_*.json analysis_output.json
