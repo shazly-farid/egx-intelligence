@@ -126,7 +126,7 @@ jobs:
 
       - name: Upload report artifact
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: egx-report-${{ steps.date.outputs.today }}
           path: Scheduled/${{ steps.date.outputs.today }}.md
