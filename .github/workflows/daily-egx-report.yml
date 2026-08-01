@@ -98,7 +98,7 @@ jobs:
           git push
 
       - name: Send email notification
-        if: success() && secrets.EMAIL_ENABLED == 'true'
+        if: success() && vars.EMAIL_ENABLED == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.SMTP_SERVER }}
@@ -116,7 +116,7 @@ jobs:
           attachments: Scheduled/${{ steps.date.outputs.today }}.md
 
       - name: Send Telegram notification
-        if: success() && secrets.TELEGRAM_ENABLED == 'true'
+        if: success() && vars.TELEGRAM_ENABLED == 'true'
         run: |
           python scripts/send_telegram.py \
             --token "${{ secrets.TELEGRAM_BOT_TOKEN }}" \
